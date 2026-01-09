@@ -43,7 +43,7 @@ export async function signDemoMessage(message: string) {
 }`,
 
   sendMemoTx: `import { useWallet } from "@lazorkit/wallet";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, TransactionInstruction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { Buffer } from "buffer";
 
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -56,6 +56,27 @@ export async function sendMemo(message: string) {
     programId: MEMO_PROGRAM_ID,
     keys: [],
     data: Buffer.from(message, "utf8"),
+  });
+
+  return await signAndSendTransaction({
+    instructions: [ix],
+    transactionOptions: { clusterSimulation: "devnet" },
+  });
+}
+
+export async function transferSol(toBase58: string, amountSol: number) {
+  const { connect, isConnected, smartWalletPubkey, signAndSendTransaction } = useWallet();
+  if (!isConnected) await connect({ feeMode: "paymaster" });
+  if (!smartWalletPubkey) throw new Error("Wallet not ready");
+
+  const to = new PublicKey(toBase58);
+  const lamports = Math.round(amountSol * LAMPORTS_PER_SOL);
+
+  // Note: paymaster covers fees, but the SOL you send comes from the smart wallet balance.
+  const ix = SystemProgram.transfer({
+    fromPubkey: smartWalletPubkey,
+    toPubkey: to,
+    lamports,
   });
 
   return await signAndSendTransaction({
