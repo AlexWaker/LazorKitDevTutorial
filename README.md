@@ -30,8 +30,8 @@ An **interactive LazorKit developer tutorial** built with **Next.js App Router**
 This project uses pnpm. Use corepack to avoid PATH differences:
 
 ```bash
-corepack pnpm install
-corepack pnpm dev
+pnpm install
+pnpm dev
 ```
 
 Open: `http://localhost:3000`
@@ -39,8 +39,8 @@ Open: `http://localhost:3000`
 Production build:
 
 ```bash
-corepack pnpm build
-corepack pnpm start
+pnpm build
+pnpm start
 ```
 
 ## Environment variables (optional)
