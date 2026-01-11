@@ -15,8 +15,18 @@ export const SYSTEM_PROGRAM_ID = new PublicKey(
 
 // Devnet USDC mint (Circle).
 export const DEFAULT_USDC_MINT = new PublicKey(
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  process.env.NEXT_PUBLIC_USDC_MINT ??
+    // Devnet USDC mint (Circle).
+    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
 );
+
+export type SupportedCluster = "devnet" | "mainnet";
+
+export function inferClusterFromRpcUrl(rpcUrl: string): SupportedCluster {
+  const u = rpcUrl.toLowerCase();
+  if (u.includes("mainnet")) return "mainnet";
+  return "devnet";
+}
 
 /**
  * LazorKit / Paymaster usually covers fees, but SPL transfers still require users to

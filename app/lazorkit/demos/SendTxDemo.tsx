@@ -12,6 +12,9 @@ import { useWallet } from "@lazorkit/wallet";
 import {
   buildUsdcTransferInstructions,
   getUsdcBalance,
+  getAssociatedTokenAddressSync,
+  inferClusterFromRpcUrl,
+  DEFAULT_USDC_MINT,
   validateRecipientAddress,
   validateTransferAmount,
   withRetry,
@@ -47,6 +50,13 @@ export default function SendTxDemo() {
 
   const rpcUrl =
     process.env.NEXT_PUBLIC_LAZORKIT_RPC_URL ?? "https://api.devnet.solana.com";
+
+  const clusterSimulation =
+    (process.env.NEXT_PUBLIC_SOLANA_CLUSTER as "devnet" | "mainnet" | undefined) ??
+    inferClusterFromRpcUrl(rpcUrl);
+
+  const explorerClusterParam =
+    clusterSimulation === "mainnet" ? "mainnet-beta" : "devnet";
 
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
@@ -98,7 +108,7 @@ export default function SendTxDemo() {
       });
       const s = await signAndSendTransaction({
         instructions: [ix],
-        transactionOptions: { clusterSimulation: "devnet" },
+        transactionOptions: { clusterSimulation },
       });
       setSig(s);
       void refreshBalance();
@@ -130,6 +140,18 @@ export default function SendTxDemo() {
         throw new Error(recipientValidation.error ?? "收款地址不合法");
       }
 
+      // Ensure sender has a USDC token account (ATA). If not, the transfer will fail with a vague SPL error.
+      const senderAta = getAssociatedTokenAddressSync(
+        DEFAULT_USDC_MINT,
+        smartWalletPubkey,
+      );
+      const senderAtaInfo = await connection.getAccountInfo(senderAta, "confirmed");
+      if (!senderAtaInfo) {
+        throw new Error(
+          "你的 USDC Token Account (ATA) 不存在。请先在该 Smart Wallet 地址领取/转入 USDC（会自动创建 ATA），再重试。",
+        );
+      }
+
       const amountValidation = validateTransferAmount(amount, usdcBalance);
       if (!amountValidation.valid || amountValidation.amountNum == null) {
         throw new Error(amountValidation.error ?? "转账金额不合法");
@@ -146,7 +168,7 @@ export default function SendTxDemo() {
 
           const s = await signAndSendTransaction({
             instructions,
-            transactionOptions: { computeUnitLimit: 200_000, clusterSimulation: "devnet" },
+            transactionOptions: { computeUnitLimit: 200_000, clusterSimulation },
           });
           await connection.confirmTransaction(s, "confirmed");
           return s;
@@ -169,6 +191,7 @@ export default function SendTxDemo() {
   }, [
     connect,
     amount,
+    clusterSimulation,
     connection,
     isConnected,
     recipient,
@@ -326,7 +349,7 @@ export default function SendTxDemo() {
             <div>{transferSig}</div>
             <a
               className="mt-1 inline-block text-indigo-600 underline-offset-2 hover:underline dark:text-indigo-300"
-              href={`https://explorer.solana.com/tx/${transferSig}?cluster=devnet`}
+              href={`https://explorer.solana.com/tx/${transferSig}?cluster=${explorerClusterParam}`}
               target="_blank"
               rel="noreferrer"
             >
@@ -342,7 +365,7 @@ export default function SendTxDemo() {
           <div>{airdropSig}</div>
           <a
             className="mt-1 inline-block text-indigo-600 underline-offset-2 hover:underline dark:text-indigo-300"
-            href={`https://explorer.solana.com/tx/${airdropSig}?cluster=devnet`}
+            href={`https://explorer.solana.com/tx/${airdropSig}?cluster=${explorerClusterParam}`}
             target="_blank"
             rel="noreferrer"
           >

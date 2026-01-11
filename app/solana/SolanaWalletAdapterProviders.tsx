@@ -9,6 +9,7 @@ import {
   LazorkitWalletAdapter,
   registerLazorkitWallet,
 } from "@lazorkit/wallet";
+import { inferClusterFromRpcUrl, type SupportedCluster } from "./solana-utils";
 
 type Props = {
   children: React.ReactNode;
@@ -25,6 +26,10 @@ export default function SolanaWalletAdapterProviders({
   paymasterUrl,
   paymasterApiKey,
 }: Props) {
+  const clusterSimulation: SupportedCluster =
+    (process.env.NEXT_PUBLIC_SOLANA_CLUSTER as SupportedCluster | undefined) ??
+    inferClusterFromRpcUrl(rpcUrl);
+
   const lazorConfig = useMemo(
     () => ({
       ...DEFAULT_CONFIG,
@@ -34,10 +39,9 @@ export default function SolanaWalletAdapterProviders({
         paymasterUrl,
         ...(paymasterApiKey ? { apiKey: paymasterApiKey } : null),
       },
-      // Keep devnet simulation to match our default config; can be overridden via env later.
-      clusterSimulation: "devnet" as const,
+      clusterSimulation,
     }),
-    [paymasterApiKey, paymasterUrl, portalUrl, rpcUrl],
+    [clusterSimulation, paymasterApiKey, paymasterUrl, portalUrl, rpcUrl],
   );
 
   useEffect(() => {
