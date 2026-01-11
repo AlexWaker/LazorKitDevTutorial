@@ -41,7 +41,6 @@ export default function SignMessageDemo() {
       setSignature(res.signature);
       setSignedPayload(res.signedPayload);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error("LazorKit signMessage failed", e, {
         origin: typeof window !== "undefined" ? window.location.origin : null,
         isSecureContext: typeof window !== "undefined" ? window.isSecureContext : null,

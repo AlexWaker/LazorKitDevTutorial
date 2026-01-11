@@ -4,24 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Buffer } from "buffer";
 import {
   Connection,
-  LAMPORTS_PER_SOL,
   PublicKey,
-  SystemProgram,
   TransactionInstruction,
-  TransactionMessage,
-  VersionedTransaction,
 } from "@solana/web3.js";
+import { useWallet } from "@lazorkit/wallet";
 import {
-  asCredentialHash,
-  asPasskeyPublicKey,
-  credentialHashFromBase64,
-  DialogManager,
-  getBlockchainTimestamp,
-  LazorkitClient,
-  Paymaster,
-  SmartWalletAction,
-  useWallet,
-} from "@lazorkit/wallet";
+  buildUsdcTransferInstructions,
+  getUsdcBalance,
+  validateRecipientAddress,
+  validateTransferAmount,
+  withRetry,
+} from "@/app/solana/solana-utils";
 
 const MEMO_PROGRAM_ID = new PublicKey(
   "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
@@ -40,48 +33,41 @@ export default function SendTxDemo() {
     isSigning,
     signAndSendTransaction,
     smartWalletPubkey,
-    wallet,
   } = useWallet();
   const [msg, setMsg] = useState("Memo from LazorKit");
   const [sig, setSig] = useState<string | null>(null);
   const [airdropSig, setAirdropSig] = useState<string | null>(null);
   const [airdropBusy, setAirdropBusy] = useState(false);
-  const [transferTo, setTransferTo] = useState("");
-  const [transferSol, setTransferSol] = useState("0.01");
+  const [recipient, setRecipient] = useState("");
+  const [amount, setAmount] = useState("1");
+  const [retryCount, setRetryCount] = useState(0);
   const [transferSig, setTransferSig] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const rpcUrl =
     process.env.NEXT_PUBLIC_LAZORKIT_RPC_URL ?? "https://api.devnet.solana.com";
-  const portalUrl =
-    process.env.NEXT_PUBLIC_LAZORKIT_PORTAL_URL ?? "https://portal.lazor.sh";
-  const paymasterUrl =
-    process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_URL ??
-    "https://kora.devnet.lazorkit.com";
-  const paymasterApiKey = process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_API_KEY;
 
-  const [balanceLamports, setBalanceLamports] = useState<number | null>(null);
+  const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceErr, setBalanceErr] = useState<string | null>(null);
 
   const connection = useMemo(() => new Connection(rpcUrl, "confirmed"), [rpcUrl]);
 
-  const balanceSolText = useMemo(() => {
-    if (balanceLamports == null) return "—";
-    const sol = balanceLamports / LAMPORTS_PER_SOL;
-    return sol.toLocaleString(undefined, { maximumFractionDigits: 4 });
-  }, [balanceLamports]);
+  const usdcBalanceText = useMemo(() => {
+    if (usdcBalance == null) return "—";
+    return usdcBalance.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }, [usdcBalance]);
 
   const refreshBalance = useCallback(async () => {
     if (!isConnected || !smartWalletPubkey) return;
     setBalanceErr(null);
     setBalanceLoading(true);
     try {
-      const lamports = await connection.getBalance(smartWalletPubkey, "confirmed");
-      setBalanceLamports(lamports);
+      const b = await getUsdcBalance(connection, smartWalletPubkey);
+      setUsdcBalance(b);
     } catch (e) {
       setBalanceErr(e instanceof Error ? e.message : String(e));
-      setBalanceLamports(null);
+      setUsdcBalance(null);
     } finally {
       setBalanceLoading(false);
     }
@@ -96,6 +82,7 @@ export default function SendTxDemo() {
     setSig(null);
     setAirdropSig(null);
     setTransferSig(null);
+    setRetryCount(0);
     try {
       if (!isConnected) await connect({ feeMode: "paymaster" });
       if (!smartWalletPubkey) {
@@ -126,199 +113,68 @@ export default function SendTxDemo() {
     smartWalletPubkey,
   ]);
 
-  /**
-   * NOTE: `useWallet().signAndSendTransaction()` currently does not pass `cpiSigners` into
-   * LazorKit execution. Instructions that require a signer (e.g. SystemProgram.transfer)
-   * will fail simulation with `MissingRequiredSignature` unless you explicitly provide CPI signers.
-   */
-  const signAndSendWithCpiSigners = useCallback(
-    async (args: { instructions: TransactionInstruction[]; cpiSigners: PublicKey[] }) => {
-      if (!wallet) throw new Error("No wallet connected.");
-      if (!smartWalletPubkey) {
-        throw new Error("Wallet is not ready yet. Please try again in a moment.");
-      }
-
-      const paymaster = new Paymaster({ paymasterUrl, apiKey: paymasterApiKey });
-      const payer = await paymaster.getPayer();
-
-      const lazorkit = new LazorkitClient(connection);
-      const timestamp = await getBlockchainTimestamp(connection); // BN (seconds)
-      const credentialHash = asCredentialHash(
-        credentialHashFromBase64(wallet.credentialId),
-      );
-      const passkeyPublicKey = asPasskeyPublicKey(wallet.passkeyPubkey);
-
-      const authMsg = await lazorkit.buildAuthorizationMessage({
-        action: {
-          type: SmartWalletAction.CreateChunk,
-          args: {
-            cpiInstructions: args.instructions,
-            cpiSigners: args.cpiSigners,
-          },
-        },
-        payer,
-        smartWallet: smartWalletPubkey,
-        passkeyPublicKey,
-        credentialHash,
-        timestamp,
-      });
-
-      const msgBase64Url = Buffer.from(authMsg)
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
-
-      const latest = await connection.getLatestBlockhash("confirmed");
-      const messageV0 = new TransactionMessage({
-        payerKey: payer,
-        recentBlockhash: latest.blockhash,
-        instructions: args.instructions,
-      }).compileToV0Message();
-      const txToShow = new VersionedTransaction(messageV0);
-      const txBase64 = Buffer.from(txToShow.serialize()).toString("base64");
-
-      const dialog = new DialogManager({ portalUrl, rpcUrl, paymasterUrl });
-      try {
-        const signRes = await dialog.openSign(
-          msgBase64Url,
-          txBase64,
-          wallet.credentialId,
-          "devnet",
-        );
-
-        const createChunkTx = await lazorkit.createChunkTxn({
-          payer,
-          smartWallet: smartWalletPubkey,
-          passkeySignature: {
-            passkeyPublicKey,
-            signature64: signRes.signature,
-            clientDataJsonRaw64: signRes.clientDataJsonBase64,
-            authenticatorDataRaw64: signRes.authenticatorDataBase64,
-          },
-          credentialHash,
-          timestamp,
-          cpiInstructions: args.instructions,
-          cpiSigners: args.cpiSigners,
-        });
-
-        const chunkSig =
-          "version" in createChunkTx
-            ? await paymaster.signAndSendVersionedTransaction(createChunkTx)
-            : await paymaster.signAndSend(createChunkTx);
-
-        await connection.confirmTransaction(chunkSig, "confirmed");
-
-        // Wait briefly for the chunk PDA to appear, then execute it.
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const walletState = await lazorkit.getWalletStateData(smartWalletPubkey);
-          const chunkPda = lazorkit.getChunkPubkey(smartWalletPubkey, walletState.lastNonce);
-          const info = await connection.getAccountInfo(chunkPda, "confirmed");
-          if (info) break;
-          await new Promise((r) => setTimeout(r, 1500));
-        }
-
-        const execTx = await lazorkit.executeChunkTxn({
-          payer,
-          smartWallet: smartWalletPubkey,
-          cpiInstructions: args.instructions,
-          cpiSigners: args.cpiSigners,
-        });
-
-        const execSig =
-          "version" in execTx
-            ? await paymaster.signAndSendVersionedTransaction(execTx)
-            : await paymaster.signAndSend(execTx);
-
-        return execSig;
-      } finally {
-        dialog.destroy();
-      }
-    },
-    [
-      connection,
-      paymasterApiKey,
-      paymasterUrl,
-      portalUrl,
-      rpcUrl,
-      smartWalletPubkey,
-      wallet,
-    ],
-  );
-
-  const handleTransfer = useCallback(async () => {
+  const handleTransferUsdc = useCallback(async () => {
     setErr(null);
     setTransferSig(null);
     setSig(null);
     setAirdropSig(null);
+    setRetryCount(0);
     try {
       if (!isConnected) await connect({ feeMode: "paymaster" });
       if (!smartWalletPubkey) {
         throw new Error("Wallet is not ready yet. Please try again in a moment.");
       }
-      const to = (() => {
-        try {
-          return new PublicKey(transferTo.trim());
-        } catch {
-          throw new Error("Invalid destination address.");
-        }
-      })();
-      const amount = Number(transferSol);
-      if (!Number.isFinite(amount) || Number.isNaN(amount) || amount <= 0) {
-        throw new Error("Invalid SOL amount.");
-      }
-      const lamports = Math.round(amount * LAMPORTS_PER_SOL);
-      if (!Number.isSafeInteger(lamports) || lamports <= 0) {
-        throw new Error("Amount is too large or invalid (lamports overflow).");
+      const recipientValidation = validateRecipientAddress(recipient);
+      if (!recipientValidation.valid || !recipientValidation.address) {
+        throw new Error(recipientValidation.error ?? "收款地址不合法");
       }
 
-      // Preflight checks for better error messages.
-      // - Recipient must exist on-chain for a SOL transfer on Solana.
-      // - Paymaster may cover fees, but not the SOL you transfer.
-      const [toInfo, fromBalance] = await Promise.all([
-        connection.getAccountInfo(to, "confirmed"),
-        connection.getBalance(smartWalletPubkey, "confirmed"),
-      ]);
-
-      setBalanceLamports(fromBalance);
-
-      if (!toInfo) {
-        throw new Error(
-          "Recipient account does not exist on Devnet yet. Ask the recipient to create/fund the account first (e.g. request an airdrop to that address) and try again.",
-        );
+      const amountValidation = validateTransferAmount(amount, usdcBalance);
+      if (!amountValidation.valid || amountValidation.amountNum == null) {
+        throw new Error(amountValidation.error ?? "转账金额不合法");
       }
 
-      if (lamports > fromBalance) {
-        throw new Error(
-          `Insufficient SOL balance in your smart wallet. Balance: ${(
-            fromBalance / LAMPORTS_PER_SOL
-          ).toFixed(4)} SOL, requested: ${amount} SOL.`,
-        );
-      }
+      const sigResult = await withRetry(
+        async () => {
+          const instructions = await buildUsdcTransferInstructions({
+            connection,
+            sender: smartWalletPubkey,
+            recipient: recipientValidation.address!,
+            amountUsdc: amountValidation.amountNum!,
+          });
 
-      const ix = SystemProgram.transfer({
-        fromPubkey: smartWalletPubkey,
-        toPubkey: to,
-        lamports,
-      });
+          const s = await signAndSendTransaction({
+            instructions,
+            transactionOptions: { computeUnitLimit: 200_000, clusterSimulation: "devnet" },
+          });
+          await connection.confirmTransaction(s, "confirmed");
+          return s;
+        },
+        {
+          maxRetries: 3,
+          initialDelayMs: 1000,
+          onRetry: (attempt, error) => {
+            console.log(`Retry attempt ${attempt} after error:`, error);
+            setRetryCount(attempt);
+          },
+        },
+      );
 
-      const s = await signAndSendWithCpiSigners({
-        instructions: [ix],
-        cpiSigners: [smartWalletPubkey],
-      });
-      setTransferSig(s);
-      void refreshBalance();
+      setTransferSig(sigResult);
+      await refreshBalance();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   }, [
     connect,
+    amount,
+    connection,
     isConnected,
+    recipient,
     refreshBalance,
-    signAndSendWithCpiSigners,
     smartWalletPubkey,
-    transferSol,
-    transferTo,
+    signAndSendTransaction,
+    usdcBalance,
   ]);
 
   const handleAirdrop = useCallback(async () => {
@@ -382,8 +238,8 @@ export default function SendTxDemo() {
             </button>
 
             <div className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-zinc-900 px-2.5 py-1 text-[12px] font-semibold text-white dark:bg-white dark:text-zinc-900">
-              <span className="opacity-80">SOL</span>
-              <span>{balanceSolText}</span>
+              <span className="opacity-80">USDC</span>
+              <span>{usdcBalanceText}</span>
             </div>
 
             <button
@@ -433,15 +289,15 @@ export default function SendTxDemo() {
       ) : null}
 
       <div className="mt-2 space-y-2">
-        <div className="text-sm font-medium">Transfer SOL</div>
+        <div className="text-sm font-medium">Gasless USDC Transfer</div>
         <div className="text-xs text-zinc-600 dark:text-zinc-400">
-          Note: the paymaster covers fees, but <span className="font-medium">the SOL you send must come from your smart wallet balance</span>.
+          Paymaster covers fees. You only need <span className="font-medium">USDC</span> balance.
         </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_140px]">
           <input
             className="h-9 w-full rounded-lg border border-zinc-300 bg-transparent px-3 text-sm outline-none dark:border-zinc-700"
-            value={transferTo}
-            onChange={(e) => setTransferTo(e.target.value)}
+            value={recipient}
+            onChange={(e) => setRecipient(e.target.value)}
             placeholder="destination address (base58)"
             inputMode="text"
             autoCapitalize="none"
@@ -450,18 +306,18 @@ export default function SendTxDemo() {
           />
           <input
             className="h-9 w-full rounded-lg border border-zinc-300 bg-transparent px-3 text-sm outline-none dark:border-zinc-700"
-            value={transferSol}
-            onChange={(e) => setTransferSol(e.target.value)}
-            placeholder="SOL"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="USDC"
             inputMode="decimal"
           />
         </div>
         <button
           className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-          onClick={handleTransfer}
-          disabled={!transferTo.trim() || !transferSol.trim() || isConnecting || isSigning}
+          onClick={handleTransferUsdc}
+          disabled={!recipient.trim() || !amount.trim() || isConnecting || isSigning}
         >
-          Send SOL
+          {retryCount > 0 ? `Retrying... (${retryCount}/3)` : "Send USDC (Gasless)"}
         </button>
         {transferSig ? (
           <div className="break-all text-xs text-zinc-700 dark:text-zinc-300">

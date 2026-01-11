@@ -110,7 +110,7 @@ const sections: Section[] = [
         <Callout variant="tip" title="Usage">
           Prefer calling <span className="font-mono">connect()</span> from a user
           gesture (button click). For most apps you’ll want{" "}
-          <span className="font-mono">feeMode: "paymaster"</span> by default.
+          <span className="font-mono">feeMode: &quot;paymaster&quot;</span> by default.
         </Callout>
 
         <Callout variant="warning" title="Common pitfalls">
@@ -120,7 +120,10 @@ const sections: Section[] = [
               TLS/proxy issues for <span className="font-mono">portalUrl</span> —
               WebAuthn will fail if the portal has cert errors.
             </li>
-            <li>SSR: wallet actions must run on the client (we use <span className="font-mono">"use client"</span>).</li>
+            <li>
+              SSR: wallet actions must run on the client (we use{" "}
+              <span className="font-mono">&quot;use client&quot;</span>).
+            </li>
           </ul>
         </Callout>
       </div>
