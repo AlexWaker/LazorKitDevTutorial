@@ -83,6 +83,13 @@ export async function transferSol(toBase58: string, amountSol: number) {
     lamports,
   });
 
+  // IMPORTANT:
+  // Some instructions (like SystemProgram.transfer) require a signer.
+  // LazorKit smart wallets execute instructions via CPI and need explicit "cpiSigners"
+  // to mark which accounts should be treated as signers during execution.
+  //
+  // If you see "MissingRequiredSignature", use the advanced flow shown in:
+  // app/lazorkit/demos/SendTxDemo.tsx
   return await signAndSendTransaction({
     instructions: [ix],
     transactionOptions: { clusterSimulation: "devnet" },

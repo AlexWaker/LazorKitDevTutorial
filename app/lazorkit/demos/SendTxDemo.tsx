@@ -8,8 +8,20 @@ import {
   PublicKey,
   SystemProgram,
   TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
-import { useWallet } from "@lazorkit/wallet";
+import {
+  asCredentialHash,
+  asPasskeyPublicKey,
+  credentialHashFromBase64,
+  DialogManager,
+  getBlockchainTimestamp,
+  LazorkitClient,
+  Paymaster,
+  SmartWalletAction,
+  useWallet,
+} from "@lazorkit/wallet";
 
 const MEMO_PROGRAM_ID = new PublicKey(
   "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
@@ -28,6 +40,7 @@ export default function SendTxDemo() {
     isSigning,
     signAndSendTransaction,
     smartWalletPubkey,
+    wallet,
   } = useWallet();
   const [msg, setMsg] = useState("Memo from LazorKit");
   const [sig, setSig] = useState<string | null>(null);
@@ -40,6 +53,12 @@ export default function SendTxDemo() {
 
   const rpcUrl =
     process.env.NEXT_PUBLIC_LAZORKIT_RPC_URL ?? "https://api.devnet.solana.com";
+  const portalUrl =
+    process.env.NEXT_PUBLIC_LAZORKIT_PORTAL_URL ?? "https://portal.lazor.sh";
+  const paymasterUrl =
+    process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_URL ??
+    "https://kora.devnet.lazorkit.com";
+  const paymasterApiKey = process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_API_KEY;
 
   const [balanceLamports, setBalanceLamports] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
@@ -107,6 +126,126 @@ export default function SendTxDemo() {
     smartWalletPubkey,
   ]);
 
+  /**
+   * NOTE: `useWallet().signAndSendTransaction()` currently does not pass `cpiSigners` into
+   * LazorKit execution. Instructions that require a signer (e.g. SystemProgram.transfer)
+   * will fail simulation with `MissingRequiredSignature` unless you explicitly provide CPI signers.
+   */
+  const signAndSendWithCpiSigners = useCallback(
+    async (args: { instructions: TransactionInstruction[]; cpiSigners: PublicKey[] }) => {
+      if (!wallet) throw new Error("No wallet connected.");
+      if (!smartWalletPubkey) {
+        throw new Error("Wallet is not ready yet. Please try again in a moment.");
+      }
+
+      const paymaster = new Paymaster({ paymasterUrl, apiKey: paymasterApiKey });
+      const payer = await paymaster.getPayer();
+
+      const lazorkit = new LazorkitClient(connection);
+      const timestamp = await getBlockchainTimestamp(connection); // BN (seconds)
+      const credentialHash = asCredentialHash(
+        credentialHashFromBase64(wallet.credentialId),
+      );
+      const passkeyPublicKey = asPasskeyPublicKey(wallet.passkeyPubkey);
+
+      const authMsg = await lazorkit.buildAuthorizationMessage({
+        action: {
+          type: SmartWalletAction.CreateChunk,
+          args: {
+            cpiInstructions: args.instructions,
+            cpiSigners: args.cpiSigners,
+          },
+        },
+        payer,
+        smartWallet: smartWalletPubkey,
+        passkeyPublicKey,
+        credentialHash,
+        timestamp,
+      });
+
+      const msgBase64Url = Buffer.from(authMsg)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "");
+
+      const latest = await connection.getLatestBlockhash("confirmed");
+      const messageV0 = new TransactionMessage({
+        payerKey: payer,
+        recentBlockhash: latest.blockhash,
+        instructions: args.instructions,
+      }).compileToV0Message();
+      const txToShow = new VersionedTransaction(messageV0);
+      const txBase64 = Buffer.from(txToShow.serialize()).toString("base64");
+
+      const dialog = new DialogManager({ portalUrl, rpcUrl, paymasterUrl });
+      try {
+        const signRes = await dialog.openSign(
+          msgBase64Url,
+          txBase64,
+          wallet.credentialId,
+          "devnet",
+        );
+
+        const createChunkTx = await lazorkit.createChunkTxn({
+          payer,
+          smartWallet: smartWalletPubkey,
+          passkeySignature: {
+            passkeyPublicKey,
+            signature64: signRes.signature,
+            clientDataJsonRaw64: signRes.clientDataJsonBase64,
+            authenticatorDataRaw64: signRes.authenticatorDataBase64,
+          },
+          credentialHash,
+          timestamp,
+          cpiInstructions: args.instructions,
+          cpiSigners: args.cpiSigners,
+        });
+
+        const chunkSig =
+          "version" in createChunkTx
+            ? await paymaster.signAndSendVersionedTransaction(createChunkTx)
+            : await paymaster.signAndSend(createChunkTx);
+
+        await connection.confirmTransaction(chunkSig, "confirmed");
+
+        // Wait briefly for the chunk PDA to appear, then execute it.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const walletState = await lazorkit.getWalletStateData(smartWalletPubkey);
+          const chunkPda = lazorkit.getChunkPubkey(smartWalletPubkey, walletState.lastNonce);
+          const info = await connection.getAccountInfo(chunkPda, "confirmed");
+          if (info) break;
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+
+        const execTx = await lazorkit.executeChunkTxn({
+          payer,
+          smartWallet: smartWalletPubkey,
+          cpiInstructions: args.instructions,
+          cpiSigners: args.cpiSigners,
+        });
+
+        const execSig =
+          "version" in execTx
+            ? await paymaster.signAndSendVersionedTransaction(execTx)
+            : await paymaster.signAndSend(execTx);
+
+        return execSig;
+      } finally {
+        dialog.destroy();
+      }
+    },
+    [
+      connection,
+      paymasterApiKey,
+      paymasterUrl,
+      portalUrl,
+      rpcUrl,
+      smartWalletPubkey,
+      wallet,
+    ],
+  );
+
   const handleTransfer = useCallback(async () => {
     setErr(null);
     setTransferSig(null);
@@ -163,9 +302,9 @@ export default function SendTxDemo() {
         lamports,
       });
 
-      const s = await signAndSendTransaction({
+      const s = await signAndSendWithCpiSigners({
         instructions: [ix],
-        transactionOptions: { clusterSimulation: "devnet" },
+        cpiSigners: [smartWalletPubkey],
       });
       setTransferSig(s);
       void refreshBalance();
@@ -176,7 +315,7 @@ export default function SendTxDemo() {
     connect,
     isConnected,
     refreshBalance,
-    signAndSendTransaction,
+    signAndSendWithCpiSigners,
     smartWalletPubkey,
     transferSol,
     transferTo,
