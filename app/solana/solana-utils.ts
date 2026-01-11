@@ -163,7 +163,7 @@ export async function buildUsdcTransferInstructions(args: {
   }
 
   const amountRaw = BigInt(Math.floor(args.amountUsdc * 1_000_000));
-  if (amountRaw <= 0n) {
+  if (amountRaw <= BigInt(0)) {
     throw new Error("转账金额过小（低于 0.000001 USDC）");
   }
 

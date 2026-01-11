@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Buffer } from "buffer";
 import {
   Connection,
+  LAMPORTS_PER_SOL,
   PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
