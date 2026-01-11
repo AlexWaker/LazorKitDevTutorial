@@ -79,9 +79,14 @@ export default function SendTxDemo() {
     setTransferSig(null);
     try {
       if (!isConnected) await connect({ feeMode: "paymaster" });
+      if (!smartWalletPubkey) {
+        throw new Error("Wallet is not ready yet. Please try again in a moment.");
+      }
       const ix = new TransactionInstruction({
         programId: MEMO_PROGRAM_ID,
-        keys: [],
+        // LazorKit SDK validates that each instruction has at least 1 account key.
+        // Memo program does not require accounts, so we attach the smart wallet as a readonly meta.
+        keys: [{ pubkey: smartWalletPubkey, isSigner: false, isWritable: false }],
         data: Buffer.from(msg, "utf8"),
       });
       const s = await signAndSendTransaction({
@@ -93,7 +98,14 @@ export default function SendTxDemo() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [connect, isConnected, msg, refreshBalance, signAndSendTransaction]);
+  }, [
+    connect,
+    isConnected,
+    msg,
+    refreshBalance,
+    signAndSendTransaction,
+    smartWalletPubkey,
+  ]);
 
   const handleTransfer = useCallback(async () => {
     setErr(null);
@@ -119,6 +131,30 @@ export default function SendTxDemo() {
       const lamports = Math.round(amount * LAMPORTS_PER_SOL);
       if (!Number.isSafeInteger(lamports) || lamports <= 0) {
         throw new Error("Amount is too large or invalid (lamports overflow).");
+      }
+
+      // Preflight checks for better error messages.
+      // - Recipient must exist on-chain for a SOL transfer on Solana.
+      // - Paymaster may cover fees, but not the SOL you transfer.
+      const [toInfo, fromBalance] = await Promise.all([
+        connection.getAccountInfo(to, "confirmed"),
+        connection.getBalance(smartWalletPubkey, "confirmed"),
+      ]);
+
+      setBalanceLamports(fromBalance);
+
+      if (!toInfo) {
+        throw new Error(
+          "Recipient account does not exist on Devnet yet. Ask the recipient to create/fund the account first (e.g. request an airdrop to that address) and try again.",
+        );
+      }
+
+      if (lamports > fromBalance) {
+        throw new Error(
+          `Insufficient SOL balance in your smart wallet. Balance: ${(
+            fromBalance / LAMPORTS_PER_SOL
+          ).toFixed(4)} SOL, requested: ${amount} SOL.`,
+        );
       }
 
       const ix = SystemProgram.transfer({

@@ -49,12 +49,14 @@ import { Buffer } from "buffer";
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
 export async function sendMemo(message: string) {
-  const { connect, isConnected, signAndSendTransaction } = useWallet();
+  const { connect, isConnected, smartWalletPubkey, signAndSendTransaction } = useWallet();
   if (!isConnected) await connect({ feeMode: "paymaster" });
+  if (!smartWalletPubkey) throw new Error("Wallet not ready");
 
   const ix = new TransactionInstruction({
     programId: MEMO_PROGRAM_ID,
-    keys: [],
+    // LazorKit validates that every instruction has at least 1 account key
+    keys: [{ pubkey: smartWalletPubkey, isSigner: false, isWritable: false }],
     data: Buffer.from(message, "utf8"),
   });
 
@@ -72,7 +74,9 @@ export async function transferSol(toBase58: string, amountSol: number) {
   const to = new PublicKey(toBase58);
   const lamports = Math.round(amountSol * LAMPORTS_PER_SOL);
 
-  // Note: paymaster covers fees, but the SOL you send comes from the smart wallet balance.
+  // Notes:
+  // - Paymaster may cover fees, but the SOL you send comes from the smart wallet balance.
+  // - On Solana, the recipient must be an existing account on that cluster, or the transfer can fail.
   const ix = SystemProgram.transfer({
     fromPubkey: smartWalletPubkey,
     toPubkey: to,

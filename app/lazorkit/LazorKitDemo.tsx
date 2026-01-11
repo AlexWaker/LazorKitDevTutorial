@@ -90,12 +90,17 @@ export default function LazorKitDemo() {
       if (!isConnected) {
         await connect({ feeMode: "paymaster" });
       }
+      if (!smartWalletPubkey) {
+        throw new Error("Wallet is not ready yet. Please try again in a moment.");
+      }
 
       // A "no-balance required" instruction (besides fees) for quick testing.
       // Fees are expected to be handled by paymaster in the default flow.
       const ix = new TransactionInstruction({
         programId: MEMO_PROGRAM_ID,
-        keys: [],
+        // LazorKit validates that each instruction has at least 1 account key.
+        // Memo program does not require accounts, so we attach the smart wallet as a readonly meta.
+        keys: [{ pubkey: smartWalletPubkey, isSigner: false, isWritable: false }],
         data: Buffer.from(msg, "utf8"),
       });
 
@@ -111,7 +116,7 @@ export default function LazorKitDemo() {
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e));
     }
-  }, [connect, isConnected, msg, signAndSendTransaction]);
+  }, [connect, isConnected, msg, signAndSendTransaction, smartWalletPubkey]);
 
   const mergedError = localError ?? (error ? error.message : null);
 
