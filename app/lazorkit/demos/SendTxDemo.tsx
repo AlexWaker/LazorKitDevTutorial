@@ -267,9 +267,31 @@ export default function SendTxDemo() {
             amountUsdc: amountValidation.amountNum!,
           });
 
+          // If the recipient ATA doesn't exist, `instructions` will include:
+          // 0) create ATA (can be rent-heavy and adds bytes)
+          // 1) transfer
+          // Sending them as 2 separate txs avoids Solana's max tx size (1232 bytes) edge cases.
+          if (instructions.length >= 2) {
+            const [createAtaIx, transferIx] = instructions;
+
+            const createSig = await signAndSendTransaction({
+              instructions: [createAtaIx],
+              transactionOptions: { clusterSimulation },
+            });
+            await connection.confirmTransaction(createSig, "confirmed");
+
+            const transferSig = await signAndSendTransaction({
+              instructions: [transferIx],
+              transactionOptions: { clusterSimulation },
+            });
+            await connection.confirmTransaction(transferSig, "confirmed");
+            return transferSig;
+          }
+
           const s = await signAndSendTransaction({
             instructions,
-            transactionOptions: { computeUnitLimit: 200_000, clusterSimulation },
+            // Let LazorKit/paymaster handle compute budget; adding a compute budget ix can increase tx size.
+            transactionOptions: { clusterSimulation },
           });
           await connection.confirmTransaction(s, "confirmed");
           return s;
