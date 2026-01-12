@@ -1,17 +1,11 @@
 import { Connection, PublicKey, TransactionInstruction } from "@solana/web3.js";
-import { Buffer } from "buffer";
-
-export const TOKEN_PROGRAM_ID = new PublicKey(
-  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-);
-
-export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
-);
-
-export const SYSTEM_PROGRAM_ID = new PublicKey(
-  "11111111111111111111111111111111",
-);
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountInstruction as splCreateAssociatedTokenAccountInstruction,
+  createTransferInstruction,
+  getAssociatedTokenAddressSync as splGetAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 
 // Devnet USDC mint (Circle).
 export const DEFAULT_USDC_MINT = new PublicKey(
@@ -35,14 +29,15 @@ export function inferClusterFromRpcUrl(rpcUrl: string): SupportedCluster {
 export function getAssociatedTokenAddressSync(
   mint: PublicKey,
   owner: PublicKey,
-  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID,
-  ataProgramId: PublicKey = ASSOCIATED_TOKEN_PROGRAM_ID,
 ): PublicKey {
-  const [address] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
-    ataProgramId,
+  // IMPORTANT: LazorKit smart wallets can be PDAs (off-curve), so we must set allowOwnerOffCurve=true.
+  return splGetAssociatedTokenAddressSync(
+    mint,
+    owner,
+    true,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
   );
-  return address;
 }
 
 export function validateRecipientAddress(recipient: string): {
@@ -95,54 +90,20 @@ export async function getUsdcBalance(
   return amount / 1_000_000; // USDC has 6 decimals
 }
 
-/**
- * Create an Associated Token Account (ATA) instruction.
- * Minimal key set (common in practice):
- * payer (signer, writable), ata (writable), owner, mint, system program, token program.
- */
 export function createAssociatedTokenAccountInstruction(args: {
   payer: PublicKey;
   ata: PublicKey;
   owner: PublicKey;
   mint: PublicKey;
 }): TransactionInstruction {
-  return new TransactionInstruction({
-    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-    keys: [
-      { pubkey: args.payer, isSigner: true, isWritable: true },
-      { pubkey: args.ata, isSigner: false, isWritable: true },
-      { pubkey: args.owner, isSigner: false, isWritable: false },
-      { pubkey: args.mint, isSigner: false, isWritable: false },
-      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from([]),
-  });
-}
-
-/**
- * Create SPL Token `Transfer` instruction (instruction discriminator = 3).
- * data layout: u8(3) + u64(amount LE)
- */
-export function createSplTokenTransferInstruction(args: {
-  source: PublicKey;
-  destination: PublicKey;
-  owner: PublicKey;
-  amountRaw: bigint;
-}): TransactionInstruction {
-  const data = Buffer.alloc(1 + 8);
-  data.writeUInt8(3, 0);
-  data.writeBigUInt64LE(args.amountRaw, 1);
-
-  return new TransactionInstruction({
-    programId: TOKEN_PROGRAM_ID,
-    keys: [
-      { pubkey: args.source, isSigner: false, isWritable: true },
-      { pubkey: args.destination, isSigner: false, isWritable: true },
-      { pubkey: args.owner, isSigner: true, isWritable: false },
-    ],
-    data,
-  });
+  return splCreateAssociatedTokenAccountInstruction(
+    args.payer,
+    args.ata,
+    args.owner,
+    args.mint,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
 }
 
 export async function buildUsdcTransferInstructions(args: {
@@ -178,12 +139,14 @@ export async function buildUsdcTransferInstructions(args: {
   }
 
   ixs.push(
-    createSplTokenTransferInstruction({
-      source: senderAta,
-      destination: recipientAta,
-      owner: args.sender,
+    createTransferInstruction(
+      senderAta,
+      recipientAta,
+      args.sender,
       amountRaw,
-    }),
+      [],
+      TOKEN_PROGRAM_ID,
+    ),
   );
 
   return ixs;
