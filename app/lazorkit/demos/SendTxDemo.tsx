@@ -175,12 +175,12 @@ export default function SendTxDemo() {
       // Ensure balance is loaded; otherwise we might send with an unknown balance and hit a vague SPL error.
       if (usdcBalance == null) {
         await refreshBalance({ force: true });
-        throw new Error("USDC 余额尚未加载，请先刷新余额后再发送。");
+        throw new Error("USDC balance is not loaded yet. Please refresh and try again.");
       }
 
       const recipientValidation = validateRecipientAddress(recipient);
       if (!recipientValidation.valid || !recipientValidation.address) {
-        throw new Error(recipientValidation.error ?? "收款地址不合法");
+        throw new Error(recipientValidation.error ?? "Invalid recipient address.");
       }
 
       // Ensure sender has a USDC token account (ATA). If not, the transfer will fail with a vague SPL error.
@@ -191,16 +191,16 @@ export default function SendTxDemo() {
       const senderAtaInfo = await connection.getAccountInfo(senderAta, "confirmed");
       if (!senderAtaInfo) {
         throw new Error(
-          "你的 USDC Token Account (ATA) 不存在。请先在该 Smart Wallet 地址领取/转入 USDC（会自动创建 ATA），再重试。",
+          "Your USDC token account (ATA) does not exist yet. Please receive/airdrop/transfer some USDC to this Smart Wallet address first (it will create the ATA automatically), then try again.",
         );
       }
       if (!senderAtaInfo.owner.equals(TOKEN_PROGRAM_ID)) {
         throw new Error(
           [
-            "检测到发送方 USDC ATA 地址存在，但该账户不属于 SPL Token Program。",
+            "Sender USDC ATA exists, but the account is not owned by the SPL Token Program.",
             `ATA: ${senderAta.toBase58()}`,
             `owner(programId): ${senderAtaInfo.owner.toBase58()}`,
-            "这通常意味着：USDC mint / 网络配置不匹配，或该地址上不是 token account。",
+            "This usually means your USDC mint / cluster config is mismatched, or the address is not a token account on this cluster.",
           ].join("\n"),
         );
       }
@@ -217,7 +217,7 @@ export default function SendTxDemo() {
 
       const amountValidation = validateTransferAmount(amount, usdcBalance);
       if (!amountValidation.valid || amountValidation.amountNum == null) {
-        throw new Error(amountValidation.error ?? "转账金额不合法");
+        throw new Error(amountValidation.error ?? "Invalid transfer amount.");
       }
 
       // Preflight: verify token balance using RPC's token-account balance API (more precise than our byte parsing).
@@ -232,7 +232,7 @@ export default function SendTxDemo() {
       }
       if (rawHave != null && rawHave < rawToSend) {
         throw new Error(
-          `USDC 余额不足：当前 ${(Number(rawHave) / 1_000_000).toFixed(6)}，需要 ${amountValidation.amountNum} USDC`,
+          `Insufficient USDC balance: you have ${(Number(rawHave) / 1_000_000).toFixed(6)}, need ${amountValidation.amountNum} USDC.`,
         );
       }
 
@@ -248,11 +248,11 @@ export default function SendTxDemo() {
         if (senderSolLamports < rentLamports) {
           throw new Error(
             [
-              "收款方 USDC ATA 不存在，需要创建 ATA（会消耗少量 SOL 租金）。",
-              `你的 Smart Wallet SOL 余额不足以支付租金：需要约 ${(rentLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL。`,
-              "解决办法：",
-              "- 让收款方先在当前网络领取/转入一次 USDC（会自动创建 ATA），然后你再转账；或",
-              "- 给你的 smart wallet 充一点 SOL（仅用于 rent，不是 gas fee）。",
+              "Recipient USDC token account (ATA) does not exist yet and must be created (this requires a small SOL rent deposit).",
+              `Your Smart Wallet SOL balance is not enough to cover rent: need ~${(rentLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL.`,
+              "How to fix:",
+              "- Ask the recipient to receive/airdrop/transfer USDC once on this cluster (it will create the ATA), then retry; or",
+              "- Add a small amount of SOL to your Smart Wallet (rent only; paymaster still covers fees).",
             ].join("\n"),
           );
         }
@@ -425,7 +425,7 @@ export default function SendTxDemo() {
         ) : null}
       </div>
 
-      <input
+      {/* <input
         className="h-9 w-full rounded-lg border border-zinc-300 bg-transparent px-3 text-sm outline-none dark:border-zinc-700"
         value={msg}
         onChange={(e) => setMsg(e.target.value)}
@@ -438,7 +438,7 @@ export default function SendTxDemo() {
         disabled={!msg || isConnecting || isSigning}
       >
         Send Memo Tx
-      </button>
+      </button> */}
 
       {sig ? (
         <div className="break-all text-xs text-zinc-700 dark:text-zinc-300">
@@ -488,7 +488,7 @@ export default function SendTxDemo() {
         </button>
         {usdcBalance == null ? (
           <div className="text-xs text-zinc-600 dark:text-zinc-400">
-            USDC 余额未加载：请先连接并点击上方 Refresh。
+            USDC balance is not loaded. Please connect and click Refresh above.
           </div>
         ) : null}
         {transferSig ? (

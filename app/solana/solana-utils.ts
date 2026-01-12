@@ -49,13 +49,13 @@ export function validateRecipientAddress(recipient: string): {
   error?: string;
 } {
   if (!recipient || recipient.trim() === "") {
-    return { valid: false, error: "收款地址不能为空" };
+    return { valid: false, error: "Recipient address is required." };
   }
   try {
     const address = new PublicKey(recipient.trim());
     return { valid: true, address };
   } catch {
-    return { valid: false, error: "收款地址格式不正确（base58）" };
+    return { valid: false, error: "Invalid recipient address (base58)." };
   }
 }
 
@@ -66,12 +66,12 @@ export function validateTransferAmount(amount: string, balance: number | null): 
 } {
   const amountNum = Number(amount);
   if (!Number.isFinite(amountNum) || Number.isNaN(amountNum) || amountNum <= 0) {
-    return { valid: false, error: "转账金额必须大于 0" };
+    return { valid: false, error: "Amount must be greater than 0." };
   }
   if (balance != null && amountNum > balance) {
     return {
       valid: false,
-      error: `余额不足：当前 ${balance.toFixed(2)} USDC`,
+      error: `Insufficient balance: you have ${balance.toFixed(2)} USDC.`,
     };
   }
   return { valid: true, amountNum };
@@ -138,7 +138,7 @@ export async function buildUsdcTransferInstructions(args: {
 
   const amountRaw = BigInt(Math.floor(args.amountUsdc * 1_000_000));
   if (amountRaw <= BigInt(0)) {
-    throw new Error("转账金额过小（低于 0.000001 USDC）");
+    throw new Error("Amount is too small (< 0.000001 USDC).");
   }
 
   ixs.push(
