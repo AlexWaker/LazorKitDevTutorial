@@ -188,9 +188,56 @@ export default function SendTxDemo() {
         );
       }
 
+      // Preflight: determine whether we will need to CREATE the recipient ATA (rent needed).
+      const recipientAta = getAssociatedTokenAddressSync(
+        DEFAULT_USDC_MINT,
+        recipientValidation.address,
+      );
+      const recipientAtaInfo = await connection.getAccountInfo(
+        recipientAta,
+        "confirmed",
+      );
+
       const amountValidation = validateTransferAmount(amount, usdcBalance);
       if (!amountValidation.valid || amountValidation.amountNum == null) {
         throw new Error(amountValidation.error ?? "转账金额不合法");
+      }
+
+      // Preflight: verify token balance using RPC's token-account balance API (more precise than our byte parsing).
+      const rawToSend = BigInt(Math.floor(amountValidation.amountNum * 1_000_000));
+      try {
+        const bal = await connection.getTokenAccountBalance(senderAta, "confirmed");
+        const rawHave = BigInt(bal.value.amount);
+        if (rawHave < rawToSend) {
+          throw new Error(
+            `USDC 余额不足：当前 ${(Number(rawHave) / 1_000_000).toFixed(6)}，需要 ${amountValidation.amountNum} USDC`,
+          );
+        }
+      } catch (e) {
+        // If the RPC can't parse token balance, we still proceed; LazorKit simulation will catch it.
+        console.warn("Failed to fetch token account balance for preflight", e);
+      }
+
+      // If recipient ATA is missing, creating it costs rent (lamports) paid by the payer in the ATA-create instruction.
+      // Paymaster covers fees, but rent may still require SOL in the smart wallet.
+      if (!recipientAtaInfo) {
+        const [senderSolLamports, rentLamports] = await Promise.all([
+          connection.getBalance(smartWalletPubkey, "confirmed"),
+          // SPL token account size is 165 bytes; rent-exempt amount varies by cluster.
+          connection.getMinimumBalanceForRentExemption(165),
+        ]);
+
+        if (senderSolLamports < rentLamports) {
+          throw new Error(
+            [
+              "收款方 USDC ATA 不存在，需要创建 ATA（会消耗少量 SOL 租金）。",
+              `你的 Smart Wallet SOL 余额不足以支付租金：需要约 ${(rentLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL。`,
+              "解决办法：",
+              "- 让收款方先在当前网络领取/转入一次 USDC（会自动创建 ATA），然后你再转账；或",
+              "- 给你的 smart wallet 充一点 SOL（仅用于 rent，不是 gas fee）。",
+            ].join("\n"),
+          );
+        }
       }
 
       const sigResult = await withRetry(
@@ -351,7 +398,8 @@ export default function SendTxDemo() {
       <div className="mt-2 space-y-2">
         <div className="text-sm font-medium">Gasless USDC Transfer</div>
         <div className="text-xs text-zinc-600 dark:text-zinc-400">
-          Paymaster covers fees. You only need <span className="font-medium">USDC</span> balance.
+          Paymaster covers fees. You need <span className="font-medium">USDC</span> balance; and if the recipient has no USDC token account yet, you may also need a tiny amount of{" "}
+          <span className="font-medium">SOL</span> for rent.
         </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_140px]">
           <input
