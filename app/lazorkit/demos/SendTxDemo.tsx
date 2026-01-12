@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Buffer } from "buffer";
 import {
   Connection,
@@ -63,26 +63,55 @@ export default function SendTxDemo() {
   const [balanceErr, setBalanceErr] = useState<string | null>(null);
 
   const connection = useMemo(() => new Connection(rpcUrl, "confirmed"), [rpcUrl]);
+  const smartWalletBase58 = useMemo(
+    () => smartWalletPubkey?.toBase58() ?? null,
+    [smartWalletPubkey],
+  );
 
   const usdcBalanceText = useMemo(() => {
     if (usdcBalance == null) return "—";
     return usdcBalance.toLocaleString(undefined, { maximumFractionDigits: 2 });
   }, [usdcBalance]);
 
-  const refreshBalance = useCallback(async () => {
-    if (!isConnected || !smartWalletPubkey) return;
+  const lastRefreshAtMsRef = useRef<number>(0);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+
+  const refreshBalance = useCallback(async (opts?: { force?: boolean }) => {
+    const force = opts?.force ?? false;
+    if (!isConnected || !smartWalletBase58) return;
+    if (refreshInFlightRef.current) {
+      await refreshInFlightRef.current;
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && now - lastRefreshAtMsRef.current < 3000) {
+      return;
+    }
+    lastRefreshAtMsRef.current = now;
+
     setBalanceErr(null);
     setBalanceLoading(true);
+    const p = (async () => {
+      try {
+        const owner = new PublicKey(smartWalletBase58);
+        const b = await getUsdcBalance(connection, owner);
+        setUsdcBalance(b);
+      } catch (e) {
+        setBalanceErr(e instanceof Error ? e.message : String(e));
+        setUsdcBalance(null);
+      } finally {
+        setBalanceLoading(false);
+      }
+    })();
+
+    refreshInFlightRef.current = p;
     try {
-      const b = await getUsdcBalance(connection, smartWalletPubkey);
-      setUsdcBalance(b);
-    } catch (e) {
-      setBalanceErr(e instanceof Error ? e.message : String(e));
-      setUsdcBalance(null);
+      await p;
     } finally {
-      setBalanceLoading(false);
+      refreshInFlightRef.current = null;
     }
-  }, [connection, isConnected, smartWalletPubkey]);
+  }, [connection, isConnected, smartWalletBase58]);
 
   useEffect(() => {
     void refreshBalance();
@@ -111,7 +140,7 @@ export default function SendTxDemo() {
         transactionOptions: { clusterSimulation },
       });
       setSig(s);
-      void refreshBalance();
+      void refreshBalance({ force: true });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -138,7 +167,7 @@ export default function SendTxDemo() {
 
       // Ensure balance is loaded; otherwise we might send with an unknown balance and hit a vague SPL error.
       if (usdcBalance == null) {
-        await refreshBalance();
+        await refreshBalance({ force: true });
         throw new Error("USDC 余额尚未加载，请先刷新余额后再发送。");
       }
 
@@ -191,7 +220,7 @@ export default function SendTxDemo() {
       );
 
       setTransferSig(sigResult);
-      await refreshBalance();
+      await refreshBalance({ force: true });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -232,7 +261,7 @@ export default function SendTxDemo() {
         "confirmed",
       );
       setAirdropSig(s);
-      await refreshBalance();
+      await refreshBalance({ force: true });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -261,7 +290,7 @@ export default function SendTxDemo() {
           <div className="flex items-center gap-2">
             <button
               className="h-8 rounded-lg border border-zinc-300 px-2 text-[12px] font-medium text-zinc-800 hover:bg-white/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-white/10"
-              onClick={refreshBalance}
+              onClick={() => void refreshBalance({ force: true })}
               disabled={!isConnected || !smartWalletPubkey || balanceLoading || isConnecting || isSigning}
               title="Refresh balance"
             >
