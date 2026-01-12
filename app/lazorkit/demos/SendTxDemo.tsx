@@ -205,17 +205,18 @@ export default function SendTxDemo() {
 
       // Preflight: verify token balance using RPC's token-account balance API (more precise than our byte parsing).
       const rawToSend = BigInt(Math.floor(amountValidation.amountNum * 1_000_000));
+      let rawHave: bigint | null = null;
       try {
         const bal = await connection.getTokenAccountBalance(senderAta, "confirmed");
-        const rawHave = BigInt(bal.value.amount);
-        if (rawHave < rawToSend) {
-          throw new Error(
-            `USDC 余额不足：当前 ${(Number(rawHave) / 1_000_000).toFixed(6)}，需要 ${amountValidation.amountNum} USDC`,
-          );
-        }
+        rawHave = BigInt(bal.value.amount);
       } catch (e) {
-        // If the RPC can't parse token balance, we still proceed; LazorKit simulation will catch it.
+        // If the RPC can't read token balance, we still proceed; LazorKit simulation will catch it.
         console.warn("Failed to fetch token account balance for preflight", e);
+      }
+      if (rawHave != null && rawHave < rawToSend) {
+        throw new Error(
+          `USDC 余额不足：当前 ${(Number(rawHave) / 1_000_000).toFixed(6)}，需要 ${amountValidation.amountNum} USDC`,
+        );
       }
 
       // If recipient ATA is missing, creating it costs rent (lamports) paid by the payer in the ATA-create instruction.
