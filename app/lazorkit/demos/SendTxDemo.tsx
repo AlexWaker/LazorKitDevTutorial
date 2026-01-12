@@ -15,6 +15,7 @@ import {
   getAssociatedTokenAddressSync,
   inferClusterFromRpcUrl,
   DEFAULT_USDC_MINT,
+  TOKEN_PROGRAM_ID,
   validateRecipientAddress,
   validateTransferAmount,
   withRetry,
@@ -142,7 +143,13 @@ export default function SendTxDemo() {
       setSig(s);
       void refreshBalance({ force: true });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const anyErr = e as unknown as { message?: string; logs?: string[] };
+      const baseMsg = e instanceof Error ? e.message : String(e);
+      const logsText =
+        anyErr && Array.isArray(anyErr.logs) && anyErr.logs.length
+          ? `\n\nProgram logs:\n${anyErr.logs.join("\n")}`
+          : "";
+      setErr(`${baseMsg}${logsText}`);
     }
   }, [
     connect,
@@ -185,6 +192,16 @@ export default function SendTxDemo() {
       if (!senderAtaInfo) {
         throw new Error(
           "你的 USDC Token Account (ATA) 不存在。请先在该 Smart Wallet 地址领取/转入 USDC（会自动创建 ATA），再重试。",
+        );
+      }
+      if (!senderAtaInfo.owner.equals(TOKEN_PROGRAM_ID)) {
+        throw new Error(
+          [
+            "检测到发送方 USDC ATA 地址存在，但该账户不属于 SPL Token Program。",
+            `ATA: ${senderAta.toBase58()}`,
+            `owner(programId): ${senderAtaInfo.owner.toBase58()}`,
+            "这通常意味着：USDC mint / 网络配置不匹配，或该地址上不是 token account。",
+          ].join("\n"),
         );
       }
 
@@ -270,7 +287,13 @@ export default function SendTxDemo() {
       setTransferSig(sigResult);
       await refreshBalance({ force: true });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const anyErr = e as unknown as { message?: string; logs?: string[] };
+      const baseMsg = e instanceof Error ? e.message : String(e);
+      const logsText =
+        anyErr && Array.isArray(anyErr.logs) && anyErr.logs.length
+          ? `\n\nProgram logs:\n${anyErr.logs.join("\n")}`
+          : "";
+      setErr(`${baseMsg}${logsText}`);
     }
   }, [
     connect,
@@ -311,7 +334,13 @@ export default function SendTxDemo() {
       setAirdropSig(s);
       await refreshBalance({ force: true });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const anyErr = e as unknown as { message?: string; logs?: string[] };
+      const baseMsg = e instanceof Error ? e.message : String(e);
+      const logsText =
+        anyErr && Array.isArray(anyErr.logs) && anyErr.logs.length
+          ? `\n\nProgram logs:\n${anyErr.logs.join("\n")}`
+          : "";
+      setErr(`${baseMsg}${logsText}`);
     } finally {
       setAirdropBusy(false);
     }

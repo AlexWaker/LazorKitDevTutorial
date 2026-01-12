@@ -7,6 +7,9 @@ import {
   getAssociatedTokenAddressSync as splGetAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 
+// Re-export for callers that want to validate account owners / program IDs.
+export { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID };
+
 // Devnet USDC mint (Circle).
 export const DEFAULT_USDC_MINT = new PublicKey(
   process.env.NEXT_PUBLIC_USDC_MINT ??
