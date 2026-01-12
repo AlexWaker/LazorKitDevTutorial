@@ -135,6 +135,13 @@ export default function SendTxDemo() {
       if (!smartWalletPubkey) {
         throw new Error("Wallet is not ready yet. Please try again in a moment.");
       }
+
+      // Ensure balance is loaded; otherwise we might send with an unknown balance and hit a vague SPL error.
+      if (usdcBalance == null) {
+        await refreshBalance();
+        throw new Error("USDC 余额尚未加载，请先刷新余额后再发送。");
+      }
+
       const recipientValidation = validateRecipientAddress(recipient);
       if (!recipientValidation.valid || !recipientValidation.address) {
         throw new Error(recipientValidation.error ?? "收款地址不合法");
@@ -339,10 +346,22 @@ export default function SendTxDemo() {
         <button
           className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
           onClick={handleTransferUsdc}
-          disabled={!recipient.trim() || !amount.trim() || isConnecting || isSigning}
+          disabled={
+            !recipient.trim() ||
+            !amount.trim() ||
+            isConnecting ||
+            isSigning ||
+            balanceLoading ||
+            usdcBalance == null
+          }
         >
           {retryCount > 0 ? `Retrying... (${retryCount}/3)` : "Send USDC (Gasless)"}
         </button>
+        {usdcBalance == null ? (
+          <div className="text-xs text-zinc-600 dark:text-zinc-400">
+            USDC 余额未加载：请先连接并点击上方 Refresh。
+          </div>
+        ) : null}
         {transferSig ? (
           <div className="break-all text-xs text-zinc-700 dark:text-zinc-300">
             <div className="font-medium">transferSignature</div>
